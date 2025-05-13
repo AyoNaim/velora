@@ -1,8 +1,9 @@
 'use client';
 
 import { generateStreamToken, generateToken } from '@/app/chat/actions';
+import Link from 'next/link';
 import React, { useState, useEffect, useRef } from 'react';
-import { ChannelData, StreamChat } from 'stream-chat';
+import { Attachment, ChannelData, StreamChat } from 'stream-chat';
 
 interface CustomChannel extends ChannelData {
   name: string;
@@ -17,6 +18,8 @@ const testUsers = [
 ]
 
 const ChatPage = () => {
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [selectedFile, setselectedFile] = useState<File | null>(null)
   const [isConnected, setisConnected] = useState(false);
   const [selectedUser, setselectedUser] = useState(testUsers[0]);
   const [chatClient, setchatClient] = useState<StreamChat | null>(null);
@@ -54,6 +57,24 @@ const ChatPage = () => {
           setmessages((prev) => [...prev, event.message!]);
         }
       });
+      channel.on('typing.start', (event) => {
+        if (event.user?.id !== selectedUser.id) {
+          setTypingUsers((prev) => {
+            const nameOrId = event.user!.name || event.user!.id;
+            const exists = prev.includes(nameOrId);
+            return exists ? prev : [...prev, nameOrId];
+          })
+        }
+      });
+
+      channel.on('typing.stop', (event) => {
+        if (event.user?.id !== selectedUser.id) {
+          const nameOrId = event.user!.name || event.user!.id;
+          setTypingUsers((prev) =>
+            prev.filter((u) => u !== (nameOrId))
+          )
+        }
+      })
     };
 
     setisConnected(true);
@@ -70,7 +91,7 @@ const ChatPage = () => {
 
   return (
     <div>
-      <h1>Chat Page</h1>
+      <h1 className='mb-3'>{ channel && <p className='font-bold'>{channel.data?.name}</p>}</h1>
       <div className='flex mb-3 gap-3'>
         {
           testUsers.map((user) => 
@@ -84,27 +105,110 @@ const ChatPage = () => {
           )
         }
       </div>
-      <div>
+      <div className='space-y-4 max-h-[400px] overflow-y-auto border p-4 rounded mb-4 bg-white'>
         {messages.map((msg, index) => (
             <div key={msg.id || index}>
-            <p>{msg?.user?.name}</p>: {typeof msg === 'string' ? msg : msg.text}
+              <p className="font-semibold text-sm text-gray-700">
+                {msg.user?.name || msg.user?.id}
+              </p>
+              <p className="mb-1">{msg.text}</p>
+
+              {msg.attachments?.map((att: Attachment, i: number) => {
+                if(att.type === 'image') {
+                  return (
+                    <img
+                      src={att.image_url || att.asset_url}
+                      key={i}
+                      alt={att.author_name}
+                      className='w-40 rounded mt-1'
+                    />
+                  );
+                } else if (att.type === 'file') {
+                  return (
+                    <a
+                      href={att.asset_url}
+                      key={i}
+                      target='_blank'
+                      rel='noreferrer noopener'
+                      className='text-blue-600 mt-5 p-3 rounded bg-amber-300'
+                      >
+                        {att.author_name || selectedFile?.name || 'download file'}
+                    </a>
+                  );
+                }
+                return null;
+              })
+
+              }
             </div>
         ))}
+
+
         </div>
-        <form 
-            className='flex gap-5'
-            onSubmit={ async(e) => {
-                e.preventDefault();
-                if(!inputValue.trim() || !channel || channel.disconnected) return;
+        <form
+        className="flex gap-3 flex-col sm:flex-row items-start sm:items-center"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!channel) return;
 
-                const sentMessage = await channel.sendMessage({ text: inputValue });
+          if(selectedFile) {
+            const upload = await channel.sendFile(selectedFile);
+            await channel.sendMessage({
+              text: inputValue,
+              attachments: [
+                {
+                  type: selectedFile.type.startsWith('image') ? 'image' : 'file',
+                  asset_url: upload.file,
+                  author_name: selectedFile.name
+                },
+              ],
+            });
+            setselectedFile(null);
+            setinputValue('');
+            return;
+          }
+          if (inputValue.trim()) {
+            await channel.sendMessage({ text: inputValue.trim() });
+            setinputValue('');
+          }
+        }
+        }
+      >
+            <input
+              disabled={!isConnected}
+              className='p-3 bg-amber-200'
+              type='text'
+              placeholder='enter your message'
+              value={inputValue}
+              onChange={(e) => {
+                setinputValue(e.target.value);
+                if (channel) {
+                  channel.keystroke();
+                }
+              }}
+            />
 
-                setinputValue('');
-            }}
-        >
-            <input disabled={!isConnected} className='p-3 bg-amber-200' type='text' placeholder='enter your message' value={inputValue} onChange={(e) => {setinputValue(e.target.value)}} />
+            <input
+              type='file'
+              className='p-2 bg-green-500'
+              accept='image/*,application/pdf'
+              onChange={(e) => {
+                if (e.target.files?.[0]) {
+                  setselectedFile(e.target.files[0])
+                }
+              }}
+            />
             <button type='submit' className='p-3 rounded-xl bg-red-500'>send message</button>
         </form>
+
+        {selectedFile && (
+        <p className="text-sm text-gray-500 mt-2">📎 {selectedFile.name}</p>
+      )}
+      {typingUsers.length > 0 && (
+        <p className='text-sm text-gray-600 mt-2'>
+          {typingUsers.join(', ')} {typingUsers.length > 1 ? 'are' : 'is'} typing...
+        </p>
+      )}
     </div>
   );
 };
